@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Outlook to WebTop</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#fafafa;color:#111;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:2rem}
+.box{background:#fff;border:1px solid #e5e5e5;border-radius:8px;padding:2rem;width:100%;max-width:480px}
+h1{font-size:1.1rem;font-weight:600;margin-bottom:.25rem}
+.sub{font-size:.85rem;color:#888;margin-bottom:1.5rem}
+.drop{border:1.5px dashed #ddd;border-radius:6px;padding:1.5rem;text-align:center;cursor:pointer;transition:all .15s;margin-bottom:1rem}
+.drop:hover{border-color:#e8611a;background:#fff9f7}
+.drop.ok{border-color:#22c55e;background:#f0faf4}
+#fname{font-size:.9rem;font-weight:500;margin-bottom:3px}
+.hint{font-size:.75rem;color:#aaa}
+button{width:100%;padding:10px;background:#e8611a;color:#fff;border:none;border-radius:6px;font-size:.9rem;font-weight:600;cursor:pointer;transition:opacity .15s;margin-bottom:1.5rem}
+button:hover{opacity:.88}
+#result{display:none;font-size:.85rem;padding:8px 12px;border-radius:5px;margin-bottom:1.5rem}
+#result.ok{background:#f0faf4;color:#166534;border:1px solid #bbf7d0}
+#result.err{background:#fff5f5;color:#991b1b;border:1px solid #fecaca}
+hr{border:none;border-top:1px solid #f0f0f0;margin-bottom:1.25rem}
+.info{font-size:.8rem;color:#666;line-height:1.7}
+.info h2{font-size:.8rem;font-weight:600;color:#333;margin:.75rem 0 .25rem}
+.info h2:first-child{margin-top:0}
+.info ol{padding-left:1.2rem}
+.info li{margin-bottom:.2rem}
+code{font-size:.75rem;background:#f5f5f5;border:1px solid #e5e5e5;padding:1px 5px;border-radius:3px;color:#e8611a}
+</style>
+</head>
+<body>
+<div class="box">
+  <h1>Outlook Contacts &#8594; WebTop</h1>
+  <p class="sub">Converts your Outlook CSV export to a WebTop-ready CSV with automatic field mapping.</p>
+  <div class="drop" id="drop" onclick="document.getElementById('fi').click()">
+    <div id="fname">Click to select the Outlook CSV file</div>
+    <div class="hint">File &#8594; Open &amp; Export &#8594; Import/Export &#8594; CSV (Contacts)</div>
+    <input type="file" id="fi" accept=".csv" style="display:none">
+  </div>
+  <button onclick="convert()">Convert and download</button>
+  <div id="result"></div>
+  <hr>
+  <div class="info">
+    <h2>How to import in WebTop</h2>
+    <ol>
+      <li>Right-click your address book &#8594; <strong>Import contacts</strong></li>
+      <li>Select the <code>_webtop.csv</code> file</li>
+      <li>Step 2 &#8212; Delimiter: <code>Comma</code>, Text qualifier: <code>"</code>, Encoding: <code>UTF-8</code></li>
+      <li>Step 4 &#8212; all fields mapped automatically &#8594; Next &#8594; Start</li>
+    </ol>
+    <h2>How it works</h2>
+    <p>Detects UTF-8 BOM or Windows-1252 automatically. Runs entirely in your browser &#8212; no data is uploaded.</p>
+  </div>
+</div>
+<script>
+var gFileBytes = null;
+var gFileName = null;
+var gIsUtf8 = false;
+
+document.getElementById('fi').onchange = function() {
+  var f = this.files[0];
+  if (!f) return;
+  gFileName = f.name;
+  document.getElementById('fname').textContent = '✅ ' + f.name;
+  document.getElementById('drop').classList.add('ok');
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    gFileBytes = new Uint8Array(e.target.result);
+    gIsUtf8 = (gFileBytes[0] === 0xEF && gFileBytes[1] === 0xBB && gFileBytes[2] === 0xBF);
+  };
+  reader.readAsArrayBuffer(f);
+};
+
+function latin1Decode(bytes) {
+  var s = '';
+  for (var i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  if (s.charCodeAt(0) === 0xFEFF) s = s.slice(1);
+  return s;
+}
+
+function utf8Decode(bytes) {
+  var text = new TextDecoder('utf-8').decode(bytes);
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  return text;
+}
+
+function fixKey(k) {
+  if (!k) return '';
+  try {
+    var b = [], i;
+    for (i = 0; i < k.length; i++) b.push(k.charCodeAt(i) & 0xFF);
+    var r = ''; i = 0;
+    while (i < b.length) {
+      var x = b[i];
+      if (x < 0x80) { r += String.fromCharCode(x); i++; }
+      else if ((x & 0xE0) === 0xC0 && i+1 < b.length) {
+        r += String.fromCharCode(((x & 0x1F) << 6) | (b[i+1] & 0x3F)); i += 2;
+      } else if ((x & 0xF0) === 0xE0 && i+2 < b.length) {
+        r += String.fromCharCode(((x & 0x0F) << 12) | ((b[i+1] & 0x3F) << 6) | (b[i+2] & 0x3F)); i += 3;
+      } else { r += String.fromCharCode(x); i++; }
+    }
+    return r.toLowerCase().trim();
+  } catch(e) { return k.toLowerCase().trim(); }
+}
+
+function norm(s) {
+  if (!s) return '';
+  return s.toLowerCase()
+    .replace(/[éèêë]/g, 'e')
+    .replace(/[àâä]/g, 'a')
+    .replace(/[ùûü]/g, 'u')
+    .replace(/[îï]/g, 'i')
+    .replace(/[ôö]/g, 'o')
+    .replace(/ç/g, 'c')
+    .trim();
+}
+
+function clean(v) {
+  if (!v) return '';
+  return String(v).trim().replace(/\n/g, ' ').replace(/\r/g, '');
+}
+
+function parseCSV(text) {
+  var rows = [], cur = '', inQ = false;
+  for (var i = 0; i < text.length; i++) {
+    var c = text[i];
+    if (c === '"') inQ = !inQ;
+    if (c === '\n' && !inQ) {
+      var t = cur.replace(/\r$/, '');
+      if (t.trim()) rows.push(splitRow(t));
+      cur = '';
+    } else {
+      cur += c;
+    }
+  }
+  var t = cur.replace(/\r$/, '');
+  if (t.trim()) rows.push(splitRow(t));
+  return rows;
+}
+
+function splitRow(line) {
+  var cells = [], cell = '', q = false;
+  for (var i = 0; i < line.length; i++) {
+    var c = line[i];
+    if (c === '"') {
+      if (q && line[i+1] === '"') { cell += '"'; i++; }
+      else q = !q;
+    } else if (c === ',' && !q) {
+      cells.push(cell.trim()); cell = '';
+    } else {
+      cell += c;
+    }
+  }
+  cells.push(cell.trim());
+  return cells;
+}
+
+function col(row, hn, kw) {
+  var kwn = norm(kw);
+  for (var i = 0; i < hn.length; i++) {
+    if (hn[i].indexOf(kwn) >= 0 && i < row.length) {
+      var v = clean(row[i]);
+      if (v) return v;
+    }
+  }
+  return '';
+}
+
+function emailsAll(row, hn) {
+  var result = [];
+  for (var i = 0; i < hn.length; i++) {
+    if (hn[i].indexOf('adresse de courrier') >= 0 && i < row.length) {
+      var v = clean(row[i]);
+      if (v.indexOf('@') >= 0 && result.indexOf(v) < 0) result.push(v);
+    }
+  }
+  return result;
+}
+
+var WT = ["Title","FirstName","LastName","DisplayName","Nickname",
+  "WorkAddress","WorkPostalCode","WorkCity","WorkState","WorkCountry",
+  "WorkTelephone","WorkTelephone2","WorkMobile","WorkFax","WorkPager",
+  "WorkEmail","WorkInstantMsg",
+  "HomeAddress","HomePostalCode","HomeCity","HomeState","HomeCountry",
+  "HomeTelephone","HomeTelephone2","HomeMobile","HomeFax","HomePager",
+  "HomeEmail","HomeInstantMsg",
+  "OtherAddress","OtherPostalCode","OtherCity","OtherState","OtherCountry",
+  "OtherEmail","OtherInstantMsg",
+  "Company","Function","Department","Manager","Assistant",
+  "AssistantTelephone","Partner","Url","Notes"];
+
+function convert() {
+  if (!gFileBytes) { show(false, 'Please select a file first'); return; }
+  try {
+    var text = gIsUtf8 ? utf8Decode(gFileBytes) : latin1Decode(gFileBytes);
+    var rows = parseCSV(text);
+    if (rows.length < 2) { show(false, 'Empty file'); return; }
+
+    var rawHeaders = rows[0];
+    var h = [], i;
+    for (i = 0; i < rawHeaders.length; i++) {
+      h.push(gIsUtf8 ? rawHeaders[i].toLowerCase().trim() : fixKey(rawHeaders[i]));
+    }
+    var hn = [];
+    for (i = 0; i < h.length; i++) hn.push(norm(h[i]));
+
+    var titrePos = [];
+    for (i = 0; i < hn.length; i++) {
+      if (hn[i] === 'titre') titrePos.push(i);
+    }
+
+    var out = [WT.join(',')];
+    var count = 0, skip = 0;
+
+    for (var ri = 1; ri < rows.length; ri++) {
+      var row = rows[ri];
+      var allEmpty = true;
+      for (i = 0; i < row.length; i++) { if (row[i]) { allEmpty = false; break; } }
+      if (!row.length || allEmpty) continue;
+
+      var last = '';
+      for (i = 0; i < hn.length; i++) {
+        if (hn[i] === 'nom' && i < row.length && clean(row[i])) {
+          last = clean(row[i]); break;
+        }
+      }
+
+      var first  = col(row, hn, 'prenom');
+      var middle = col(row, hn, 'deuxieme prenom');
+      var civility = (titrePos.length > 0 && titrePos[0] < row.length) ? clean(row[titrePos[0]]) : '';
+      var jobTitle = (titrePos.length > 1 && titrePos[1] < row.length) ? clean(row[titrePos[1]]) : '';
+      var allEmails = emailsAll(row, hn);
+
+      var displayParts = [];
+      if (first) displayParts.push(first);
+      if (middle) displayParts.push(middle);
+      if (last) displayParts.push(last);
+      var display = displayParts.join(' ');
+
+      if (!display && !allEmails.length) { skip++; continue; }
+
+      var notesRaw = col(row, hn, 'notes');
+      var notes = notesRaw.replace(/0\/0\/00/g, '').trim() === '' ? '' : notesRaw;
+
+      var rec = {
+        Title: civility, FirstName: first, LastName: last,
+        DisplayName: display, Nickname: '',
+        WorkAddress:    col(row, hn, 'rue (bureau)'),
+        WorkPostalCode: col(row, hn, 'code postal (bureau)'),
+        WorkCity:       col(row, hn, 'ville (bureau)'),
+        WorkState:      col(row, hn, 'dep/region (bureau)'),
+        WorkCountry:    col(row, hn, 'pays/region (bureau)'),
+        WorkTelephone:  col(row, hn, 'telephone (bureau)'),
+        WorkTelephone2: col(row, hn, 'telephone 2 (bureau)'),
+        WorkMobile:     col(row, hn, 'tel. mobile'),
+        WorkFax:        col(row, hn, 'telecopie (bureau)'),
+        WorkPager: '', WorkEmail: allEmails[0] || '', WorkInstantMsg: '',
+        HomeAddress:    col(row, hn, 'rue (domicile)'),
+        HomePostalCode: col(row, hn, 'code postal (domicile)'),
+        HomeCity:       col(row, hn, 'ville (domicile)'),
+        HomeState:      col(row, hn, 'dep/region (domicile)'),
+        HomeCountry:    col(row, hn, 'pays/region (domicile)'),
+        HomeTelephone:  col(row, hn, 'telephone (domicile)'),
+        HomeTelephone2: '', HomeMobile: '', HomeFax: '', HomePager: '',
+        HomeEmail: allEmails[1] || '', HomeInstantMsg: '',
+        OtherAddress:   col(row, hn, 'rue (autre)'),
+        OtherPostalCode:col(row, hn, 'code postal (autre)'),
+        OtherCity:      col(row, hn, 'ville (autre)'),
+        OtherState:     col(row, hn, 'dep/region (autre)'),
+        OtherCountry:   col(row, hn, 'pays/region (autre)'),
+        OtherEmail: allEmails[2] || '', OtherInstantMsg: '',
+        Company:    col(row, hn, 'societe'),
+        Function:   jobTitle,
+        Department: col(row, hn, 'service'),
+        Manager:    col(row, hn, 'responsable'),
+        Assistant:  col(row, hn, 'nom de l assistant'),
+        AssistantTelephone: col(row, hn, 'telephone de l assistant'),
+        Partner: '', Url: col(row, hn, 'page web'), Notes: notes
+      };
+
+      var line = [];
+      for (var ki = 0; ki < WT.length; ki++) {
+        var v = rec[WT[ki]] || '';
+        if (!v) { line.push(''); continue; }
+        if (v.indexOf(',') >= 0 || v.indexOf('"') >= 0) {
+          line.push('"' + v.replace(/"/g, '""') + '"');
+        } else {
+          line.push(v);
+        }
+      }
+      out.push(line.join(','));
+      count++;
+    }
+
+    var csv = '\uFEFF' + out.join('\r\n');
+    var blob = new Blob([csv], {type: 'text/csv;charset=utf-8'});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = gFileName.replace(/\.csv$/i, '') + '_webtop.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+    show(true, count + ' contacts converted' + (skip ? ' \u2014 ' + skip + ' skipped' : ''));
+  } catch(e) {
+    show(false, 'Error: ' + e.message);
+  }
+}
+
+function show(ok, msg) {
+  var d = document.getElementById('result');
+  d.style.display = 'block';
+  d.className = ok ? 'ok' : 'err';
+  d.textContent = msg;
+}
+</script>
+</body>
+</html>
