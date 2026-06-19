@@ -167,13 +167,32 @@ function col(row, hn, kw) {
   return '';
 }
 
+var EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
+
 function emailsAll(row, hn) {
   var result = [];
   for (var i = 0; i < hn.length; i++) {
-    if (hn[i].indexOf('adresse de courrier') >= 0 && i < row.length) {
-      var v = clean(row[i]);
-      if (v.indexOf('@') >= 0 && result.indexOf(v) < 0) result.push(v);
-    }
+    // Outlook also exports an "Adresse de courrier affichee" column
+    // (display form "Name <email>" or "Name (email)") alongside the
+    // plain "Adresse de courrier [N]" columns. Skip the display variant
+    // entirely so its "Name (email)" text never lands in a WebTop
+    // email field, which produces an invalid vCard EMAIL property and
+    // breaks CardDAV sync (Sabre\VObject\EofException server-side).
+    if (hn[i].indexOf('adresse de courrier') < 0) continue;
+    if (hn[i].indexOf('affichee') >= 0) continue;
+    if (i >= row.length) continue;
+
+    var raw = clean(row[i]);
+    if (!raw) continue;
+
+    // Defensive extraction: even on the "plain" column, pull out just
+    // the email address in case it's wrapped as "Name (email)" or
+    // "Name <email>" so we never store a non-RFC5322 value.
+    var m = raw.match(EMAIL_RE);
+    if (!m) continue;
+
+    var v = m[0];
+    if (result.indexOf(v) < 0) result.push(v);
   }
   return result;
 }
